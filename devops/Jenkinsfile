@@ -7,6 +7,7 @@ pipeline {
                 docker { image 'maven:3.8.6-openjdk-11-slim' }
             }
             steps {
+                sh 'apt-get update && apt-get install -y make'
                 sh 'make lint'
             }
         }
@@ -16,6 +17,7 @@ pipeline {
                 docker { image 'maven:3.8.6-openjdk-11-slim' }
             }
             steps {
+                sh 'apt-get update && apt-get install -y make'
                 sh 'make test'
             }
         }
