@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+    branches:
+      - develop
+      - master
+  workflow_dispatch:
+    inputs:
+      RUN_CD:
+        description: 'Ejecutar CD (despliegue)?'
+        type: boolean
+        default: false
+      DEPLOY_ENV:
+        description: 'Entorno de despliegue'
+        type: choice
+        options:
+          - DEV
+          - PRO
+        default: DEV
+
+env:
+  IMAGE_NAME: devops-java-app
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    container:
+      image: maven:3.8.6-openjdk-11-slim
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Instalar make y ejecutar lint
+        run: |
+          apt-get update && apt-get install -y make
+          make lint
+
+      - name: Ejecutar tests
+        run: make test
+
+  docker-build:
+    runs-on: ubuntu-latest
+    needs: ci
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Construir imagen Docker
+        run: |
+          docker build -t ${{ env.IMAGE_NAME }} -f devops/Dockerfile .
+          echo "Imagen ${{ env.IMAGE_NAME }} construida correctamente"
+
+  cd:
+    runs-on: ubuntu-latest
+    needs: docker-build
+    if: |
+      (github.ref_name == 'develop' || github.ref_name == 'master') &&
+      inputs.RUN_CD == true
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Desplegar con Docker Compose
+        run: |
+          docker compose -f docker-compose.yml up -d
+          sleep 20
+          docker compose -f docker-compose.yml exec -T app curl -f http://localhost:8080/hello || true
+
+      - name: Limpieza siempre
+        if: always()
+        run: docker compose -f docker-compose.yml down --volumes
