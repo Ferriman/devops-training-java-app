@@ -1,0 +1,130 @@
+# Pipeline CI/CD para la aplicación Java en Azure DevOps
+# Equivalente a Jenkinsfile (Práctica 2), ci.yml GitHub Actions (Práctica 3)
+# y .gitlab-ci.yml (Práctica 4)
+
+# Parámetros de ejecución manual
+parameters:
+  - name: RUN_CD
+    displayName: 'Ejecutar CD (despliegue)?'
+    type: boolean
+    default: false
+  - name: DEPLOY_ENV
+    displayName: 'Entorno de despliegue'
+    type: string
+    default: DEV
+    values:
+      - DEV
+      - PRO
+
+# Trigger automático en develop y master
+trigger:
+  branches:
+    include:
+      - develop
+      - master
+      - feat/*
+
+# Trigger en Pull Requests hacia develop y master
+pr:
+  branches:
+    include:
+      - develop
+      - master
+
+# Variables globales reutilizables en todos los stages y jobs
+variables:
+  IMAGE_NAME: devops-java-app
+  APP_URL: http://localhost:8080/hello
+
+# ─────────────────────────────────────────────
+# STAGE CI
+# ─────────────────────────────────────────────
+stages:
+  - stage: CI
+    displayName: 'Integración Continua'
+    jobs:
+
+      # Job de lint ejecutado dentro de un contenedor Maven
+      - job: Lint
+        displayName: 'CI - Lint'
+        pool:
+          vmImage: ubuntu-latest
+        container: maven:3.8.6-openjdk-11-slim
+        steps:
+          - checkout: self
+
+          - script: |
+              echo "Rama: $(Build.SourceBranchName)"
+              echo "Commit: $(Build.SourceVersion)"
+              echo "IMAGE_NAME: $(IMAGE_NAME)"
+            displayName: 'Información del entorno'
+
+          - script: |
+              apt-get update && apt-get install -y make
+              make lint
+            displayName: 'Ejecutar lint'
+
+      # Job de tests unitarios ejecutado dentro de un contenedor Maven
+      - job: Tests
+        displayName: 'CI - Tests unitarios'
+        dependsOn: Lint
+        pool:
+          vmImage: ubuntu-latest
+        container: maven:3.8.6-openjdk-11-slim
+        steps:
+          - checkout: self
+
+          - script: |
+              apt-get update && apt-get install -y make
+              make test
+            displayName: 'Ejecutar tests'
+
+      # Job de construcción de la imagen Docker
+      - job: DockerBuild
+        displayName: 'CI - Docker Build'
+        dependsOn: Tests
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - checkout: self
+
+          - script: |
+              docker build -t $(IMAGE_NAME) -f devops/Dockerfile .
+              echo "Imagen $(IMAGE_NAME) construida correctamente"
+            displayName: 'Construir imagen Docker'
+
+  # ─────────────────────────────────────────────
+  # STAGE CD
+  # ─────────────────────────────────────────────
+  - stage: CD
+    displayName: 'Despliegue Continuo'
+    dependsOn: CI
+    # Condición: solo ejecutar en develop o master Y si RUN_CD es true
+    condition: |
+      and(
+        succeeded(),
+        or(
+          eq(variables['Build.SourceBranchName'], 'develop'),
+          eq(variables['Build.SourceBranchName'], 'master')
+        ),
+        eq('${{ parameters.RUN_CD }}', 'true')
+      )
+    jobs:
+      - job: Deploy
+        displayName: 'CD - Despliegue con Docker Compose'
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - checkout: self
+
+          - script: |
+              docker compose -f docker-compose.yml up -d
+              sleep 20
+              docker compose -f docker-compose.yml exec -T app curl -f http://localhost:8080/hello || true
+            displayName: 'Desplegar con Docker Compose y test e2e'
+
+          # Limpieza garantizada aunque falle el job
+          - script: |
+              docker compose -f docker-compose.yml down --volumes
+            displayName: 'Limpieza de recursos'
+            condition: always()
